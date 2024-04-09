@@ -375,19 +375,24 @@ Many multivariate approaches deal with some sort of similarity/dissimilarity mea
 
 In those cases, predictors with vastly different scales (e.g. mean_tmin.c_Jan from -10 to 10 C vs mean_dayl.s_Jul from 48000 to 51000) need to be normalized so measurement scale does not affect variable importance.    
 
-Thus, our numerical predictor variables need to be normalized (center and scale) before starting our multivariate analysis.  
+Thus, our numerical predictor variables need to be normalized (center and scale) before starting our multivariate analysis.  # so they have mean 0 and sd = 0
 
 Some analysis do the normalization for you (like PCA), and others don't (like k-means), so need to be aware of this to ensure data is normalized.  
 
 Since both PCA and k-means only take numerical variables, let's select them now.  
 ```{r selecting only numerical vars}
-weather_n 
+
+weather_n <- weather %>%
+  dplyr::select(-c(year:strength_gtex))
 
 weather_n
 ```
 
 # PCA  
-Principal component analysis (PCA) is a dimensionality reduction approach that accomodates only numerical variables.  
+Principal component analysis (PCA) is a dimensionality reduction approach that accommodates only numerical variables.\
+
+* PCA looks for variables that are highly correlated, and give predictors
+* PCAs are orthogonal, idependent, not multicolinear
 
 Finds linear relationships among predictors that can be represented in a lower number of uncorrelated dimensions.  
 
@@ -396,8 +401,8 @@ Works well when at least some predictors are correlated.
 PCA:  
 
 - Is used for dimensionality reduction  
-- Is an unsupervised analysis (no outcome)  
-- Only takes predictors  
+- Is an unsupervised analysis (no outcome)  ; thus, no y variable
+- Only takes predictors  ; not predicted variable
 - Predictors need to be numerical  
 
 Some PCA properties:  
@@ -411,31 +416,59 @@ Some PCA properties:
 - The goal is to select a small number of PCs that explain a minimum threshold of the total variance (e.g., 70%).  
 
 ```{r pca in action}
+library(knitr)
 knitr::include_graphics("https://miro.medium.com/v2/resize:fit:1200/1*V4H3Cu8qGr_90WANKSO9BA.gif")
 ```
+PCA
+* 1. standardize data - center = 0
+
+* 2. covariance matrix
+
+* 3. eigenvector - higher, more variability; length of arrow, is the eigenvector
+
+The first PC, PC1 = will explain most variability; largest dimension
+
+PC2 = next dimension that has 2nd most variability, and so on
+
 Let's run PCA for our weather data.  
 
 ```{r pca model}
-mod_pca 
+mod_pca <- prcomp(weather_n, scale. = T)
+
+mod_pca
+
+summary(mod_pca) # prop of variance, PC1 -explains 35% of variability
 
 ```
+
+* PC is not a variable selection tool by itself
 
 ## Choosing number of PCs  
 Based on scree plot (total variance):  
 ```{r pca checking number of components}
 # Scree plot
 
+fviz_eig(mod_pca,
+         addlabels = T
+         )
+
 ```
-    
+* scree plot is not cumulative
 PCs 1 and 2 explain ~35% and ~26% (61%) of total variance.
 This indicates that original variables were correlated (as we expected).   
 
 If wanted to use enough PCs to explain 70% of total variance, how many would we need?  
 ```{r PCs to explain 70pct variance}
-
+mod_pca %>%
+  get_eig() %>%
+  mutate(pc = 1: nrow(.)) %>%
+  ggplot(aes(x = pc,
+             y = cumulative.variance.percent)) +
+  geom_bar (stat = "identity") +
+geom_hline(yintercept = 70)
 
 ```
-    
+* plot is cumulative
 We would need 4 PCs.  
 Normally we wish to use 2-3 PCs, but 4 is certainly better than 72 original variables.  
 
@@ -458,19 +491,26 @@ mod_pca$rotation %>%
 
 ```
 
-Which variables contributed most to PC1, regardless of direction?  
+Which variables contributed most to PC1, regardless of direction? mean_dayl.s_Jan, mean_dayl.s_Dec
+
+* variables that have the highest loadings are related to mean_dayl.s from Jan - Oct ; and lowest loadings are mean_dayl.s from Apr - September
+
 
 ```{r variables contributing to PC1}
-
+fviz_contrib(mod_pca,
+             choice = "var",
+             axes = 1)
 ```
-  
+* dotted red line = overall average loading
+
 Let's check the eigenvectors for both PCs 1 and 2 variables:  
 
 ```{r pca variable contribution }
 fviz_pca_var(mod_pca, 
              col.var = "contrib", # Color by contributions to the PC
              gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
-             repel = TRUE     # Avoid text overlapping
+             repel = TRUE,     # Avoid text overlapping
+             select.var = list(contrib = 5)
              )
 
 ```
@@ -480,8 +520,12 @@ The longer is the eigenvector for a given variable, the more important it is tow
 Let's plot PC1 vs PC2 scores, look for any groupings.  
 
 ```{r PC1 vs PC2}
-
+fviz_pca_ind(mod_pca,
+             label = F)
 ```
+  each PC = each variable * to weight of coefficient; added together for all variables,
+  
+  prediction = PC score
   
 Appears that some groups exist.  
 
@@ -497,18 +541,22 @@ Let's add the first 4 PCs to our original dataset and run a regression versus gr
 
 ```{r pca scores}
 # Extract first 4 PCs scores
-pca_scores 
+pca_scores <- mod_pca$x %>%
+  as.data.frame() %>%
+  dplyr::select(PC1:PC4)
 
 pca_scores
 ```
 
 ```{r pca regression}
 # Adding PCs 1-4 scores to original data set
-weather_postpca 
+weather_postpca <- weather %>%
+  bind_cols(pca_scores)
 
 # Regression of yield ~ PCs
 
-lm_pca 
+lm_pca <- lm(strength_gtex ~ PC1 + PC2 + PC3 + PC4,
+             data = weather_postpca)
 
 # Summary  
 summary(lm_pca)
@@ -517,11 +565,18 @@ summary(lm_pca)
 
 ```{r pca regression}
 # Checking VIF
-
+vif(lm_pca) # all 1 coz they are orthogonal, independent
 ```
 
 ```{r pca regression plots}
 # Plotting strength vs PC1
+
+ggplot(weather_postpca,
+       aes(x = PC1,
+           y = strength_gtex)
+       ) +
+  geom_point() +
+  geom_smooth(method = "lm")
 
 ```
 
@@ -531,7 +586,7 @@ summary(lm_pca)
 ggplot(weather_postpca, 
        aes(x = PC2, y = strength_gtex))+
   geom_point()+
-  geom_smooth(method = "lm")
+  geom_smooth(method = "lm") #PC 2 positive relationship; slope is significant based on lm summary
 
 ```
 
@@ -540,7 +595,7 @@ ggplot(weather_postpca,
 ggplot(weather_postpca, 
        aes(x = PC3, y = strength_gtex))+
   geom_point()+
-  geom_smooth(method = "lm")
+  geom_smooth(method = "lm")  #PC 3 negative relationship with strength
 
 ```
 
